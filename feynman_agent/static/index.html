@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feynman agent</title>
+<link rel="stylesheet" href="/app.css">
+<!-- The report is mathematics; without KaTeX it still reads as LaTeX source. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="/app.js"></script>
+</head>
+<body>
+
+<aside>
+  <h1>Feynman agent</h1>
+  <p class="sub">identify · look up · reduce · read the papers</p>
+
+  <details open>
+    <summary>Tools</summary>
+    <label>NeatIBP directory<input id="neatibp" spellcheck="false"></label>
+    <label>Singular binary<input id="singular" spellcheck="false"></label>
+    <label>SparseRREF library<input id="spasm" spellcheck="false" placeholder="…/libspasm.so"></label>
+    <p class="hint" id="toolhint">Missing tools are not an error: the reduction is mocked instead.</p>
+  </details>
+
+  <details open>
+    <summary>Model</summary>
+    <label>Provider<select id="provider"></select></label>
+    <label>Model<input id="model" spellcheck="false"></label>
+    <label>Base URL<input id="base_url" spellcheck="false" placeholder="provider default"></label>
+    <label>API key<input id="api_key" type="password" autocomplete="off"></label>
+    <p class="hint" id="keyhint"></p>
+    <p class="hint bad" id="figurehint" hidden>This provider reads no images, so a dropped
+      diagram cannot be identified — give a Nickel index or an edge list instead.</p>
+  </details>
+
+  <details open>
+    <summary>Run options</summary>
+    <label>Input kind
+      <select id="kind">
+        <option value="">detect</option>
+        <option value="nickel">Nickel index</option>
+        <option value="edgelist">edge list</option>
+        <option value="integrand">integrand</option>
+        <option value="figure">figure</option>
+      </select>
+    </label>
+    <label>NeatIBP
+      <select id="neatibp_mode">
+        <option value="auto">auto</option>
+        <option value="real">real</option>
+        <option value="mock">mock</option>
+      </select>
+    </label>
+    <label>Read papers
+      <select id="extract">
+        <option value="auto">auto — model reads them</option>
+        <option value="fetch">fetch — no model</option>
+        <option value="off">off — titles only</option>
+      </select>
+    </label>
+    <label>arXiv search
+      <select id="arxiv">
+        <option value="ask">ask me</option>
+        <option value="yes">always</option>
+        <option value="no">never</option>
+      </select>
+    </label>
+    <label>Papers to open<input id="max_papers" type="number" min="1" max="20"></label>
+    <label>Work directory<input id="workdir" spellcheck="false" placeholder="/tmp/feynman_agent/…"></label>
+    <label class="check"><input type="checkbox" id="offline"> offline — cache only</label>
+    <label class="check"><input type="checkbox" id="reduce"> reduce even when a reference is found</label>
+  </details>
+</aside>
+
+<main>
+  <div class="row">
+    <input id="input" spellcheck="false"
+           placeholder="e12|e3|34|5|e5|e|   —   an edge list, a propagator block, or the path to a figure">
+    <button id="go">Run</button>
+  </div>
+
+  <div id="drop" class="drop">
+    <input type="file" id="file" accept="image/*,.pdf" hidden>
+    <p id="dropnote">Drop a diagram here, or click to choose one</p>
+    <img id="preview" alt="the diagram that was dropped" hidden>
+  </div>
+
+  <ol id="progress"></ol>
+
+  <section id="ask" class="ask" hidden>
+    <p id="askText"></p>
+    <p class="hint">unresolved: <span id="askList"></span></p>
+    <button id="search">Search arXiv</button>
+    <button id="stop" class="quiet">Stop here</button>
+  </section>
+
+  <section id="out" hidden>
+    <div class="row save">
+      <input id="savepath" spellcheck="false" placeholder="reports/&lt;nickel&gt;.md">
+      <button id="save">Store as .md</button>
+      <span id="saved" class="hint"></span>
+    </div>
+    <article id="report"></article>
+  </section>
+</main>
+
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Local cache of already-known Feynman integrals, keyed by Nickel index.",
+    "'result' should hold a closed form only when it is actually known;",
+    "otherwise leave it empty and give a 'reference' so the agent reports a",
+    "pointer rather than inventing an expression.",
+    "A Nickel index names a graph, not an integral, so an entry for a massive",
+    "one needs 'masses': one term per propagator in this entry's own Nickel",
+    "order, empty string for a massless line. Omit it and every line is taken",
+    "as massless, which is what all three entries below are."
+  ],
+  "integrals": [
+    {
+      "nickel": "e11|e|",
+      "name": "massless one-loop bubble",
+      "result": "G(nu1,nu2) = Gamma(nu1+nu2-d/2) Gamma(d/2-nu1) Gamma(d/2-nu2) / (Gamma(nu1) Gamma(nu2) Gamma(d-nu1-nu2)) * (-p^2)^(d/2-nu1-nu2)   [normalisation: int d^d l/(i pi^(d/2)), propagators (-l^2)^nu1 (-(l+p)^2)^nu2]",
+      "reference": "textbook; e.g. Smirnov, 'Analytic Tools for Feynman Integrals', eq. (A.1)",
+      "masters": ["G[1,1]"],
+      "notes": "Single master. Exact in d; expand with d = 4 - 2 eps."
+    },
+    {
+      "nickel": "e12|e2|e|",
+      "name": "one-loop triangle, one off-shell leg",
+      "result": "",
+      "reference": "arXiv:hep-ph/9605392",
+      "masters": ["G[1,1,1]"],
+      "notes": "Reduces to the massless bubble; the one-mass triangle is not an independent master."
+    },
+    {
+      "nickel": "e12|e3|34|5|e5|e|",
+      "name": "massless planar double box",
+      "result": "",
+      "reference": "hep-ph/9905323 (Smirnov, analytic result for the on-shell massless double box)",
+      "masters": [
+        "G[1,1,1,1,1,1,1,-1,0]", "G[1,1,1,1,1,1,1,0,0]",
+        "G[1,1,0,1,1,0,1,0,0]", "G[1,1,1,0,1,0,1,0,0]",
+        "G[1,0,1,0,1,0,1,0,0]", "G[1,0,1,1,0,1,0,0,0]",
+        "G[0,1,0,0,1,0,1,0,0]", "G[1,0,0,1,0,0,1,0,0]"
+      ],
+      "notes": "8 masters for the massless off-shell family, as reproduced by the NeatIBP run shipped with this repo (examples/dbox)."
+    }
+  ]
+}
