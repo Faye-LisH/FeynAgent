@@ -45,6 +45,14 @@ class Topology:
     # all-massless configuration is a statement and an absent one is not, and
     # ``masses`` alone cannot tell those apart.
     mass_config: str = ""
+    # Irreducible scalar products the caller listed among the propagators, as
+    # momenta. They are no lines of the graph, but they are the caller's choice
+    # of basis, and a numerator is expanded in that basis rather than in one
+    # invented here.
+    isps: list[str] = field(default_factory=list)
+    # A polynomial in dot products of the momenta, ``l1.k4`` or ``(l1.k4)^2 -
+    # l2.l2``, sitting over the propagators. Empty means the scalar integral.
+    numerator: str = ""
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -425,6 +433,7 @@ def from_propagators(
                         for j, i in enumerate(keep)
                         if (masses or {}).get(i)
                     },
+                    isps=[propagators[i] for i in range(len(props)) if i not in keep],
                     notes=notes,
                 )
     raise ValueError(
@@ -541,6 +550,11 @@ def parse_g(expr: str) -> list[int]:
     """``G[1,1,0,1,-1]`` -> the list of propagator powers."""
     inside = expr[expr.index("[") + 1 : expr.rindex("]")]
     return [int(x.strip()) for x in inside.split(",")]
+
+
+def g_string(powers: list[int]) -> str:
+    """The inverse: propagator powers -> ``G[1,1,0,1,-1]``, as NeatIBP writes it."""
+    return "G[" + ",".join(map(str, powers)) + "]"
 
 
 def assign_momenta(topo: Topology) -> Topology:

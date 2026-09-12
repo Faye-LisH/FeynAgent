@@ -552,8 +552,21 @@ def _read_with_model(ex: Extraction) -> tuple[str, list[str]]:
     return reply, []
 
 
-def extract(paper: Paper, target: str = "", offline: bool = False, summarise: bool = True):
-    """Everything this paper has to offer about ``target``, with provenance."""
+def extract(
+    paper: Paper,
+    target: str = "",
+    offline: bool = False,
+    summarise: bool = True,
+    rewrite: bool = False,
+):
+    """Everything this paper has to offer about ``target``, with provenance.
+
+    Two independent model steps, because they cost differently: ``summarise``
+    is one call for the whole paper, ``rewrite`` is one per candidate equation
+    and is what empties an API quota. Without the second the equations are
+    printed as the authors wrote them, which is all the report ever showed
+    before that step existed.
+    """
     ex = Extraction(paper=paper, target=target)
     try:
         raw = fetch(paper.arxiv_id, offline=offline)
@@ -569,19 +582,21 @@ def extract(paper: Paper, target: str = "", offline: bool = False, summarise: bo
     ex.readme = src.readme
     ex.equations = equations(src)
     ex.pointers = pointers(src)
-    if summarise and ex.found:
-        clarify(ex, src)
-        ex.reading, notes = _read_with_model(ex)
-        ex.notes += notes
+    if rewrite and ex.found:
+        clarify(ex, src)  # sorts the candidates, and keeps at most MAX_EQUATIONS
     else:
         ex.equations = ex.equations[:MAX_EQUATIONS]
+    if summarise and ex.found:
+        ex.reading, notes = _read_with_model(ex)
+        ex.notes += notes
     return ex
 
 
 def clarify(ex: Extraction, src: Source) -> None:
     """Sort the candidate equations into results, rewritten so they render.
 
-    Everything about this step is optional: without a key, or offline, or when
+    A call per equation, so it happens only when asked for. Everything about it
+    is optional in the other sense too: without a key, or offline, or when
     the call fails, the candidates stay as they were and the report prints the
     authors' own LaTeX — which is what it printed before this step existed. The
     reason is said out loud rather than left as an unexplained difference

@@ -178,7 +178,7 @@ def local_db(state: State) -> dict:
         entries = [{"name": e.name, "result": e.result, "source": e.source} for e in hit.exact]
         return {"findings": {item["origin"]: {"local": entries}}} if entries else {}
 
-    if hit.found:
+    if hit.found and not topo.numerator:
         entry = next(e for e in hit.exact if e.has_result)
         return {
             "db_hit": hit,
@@ -189,7 +189,12 @@ def local_db(state: State) -> dict:
     # An entry for the same graph that was rejected on masses is worth naming:
     # "no entry" would be misleading when the massless case is right there.
     same_graph = [e for e in hit.similar if e.nickel == topo.nickel()]
-    if hit.exact:
+    if hit.found:
+        # Stored results are scalar integrals. With a numerator the graph is the
+        # same and the integral is not; the reduction says what it is in terms
+        # of the family's masters, and this entry may well be one of those.
+        detail = f"{len(hit.exact)} entry/entries for this graph, but the numerator has to be reduced first"
+    elif hit.exact:
         detail = f"{len(hit.exact)} entry/entries for this Nickel index but no stored result"
     elif same_graph:
         detail = f"{len(same_graph)} entry/entries for {topo.nickel()} but with different masses"
@@ -238,8 +243,9 @@ def neatibp_node(state: State) -> dict:
     """Reduce the topology to master integrals with NeatIBP."""
     topo = state["topo"]
     workdir = Path(state.get("workdir") or f"/tmp/feynman_agent/{topo.nickel().replace('|', '_')}")
+    what = f" with numerator {topo.numerator}" if topo.numerator else ""
     _progress(
-        f"NeatIBP: reducing {topo.nickel()}, {len(topo.int_edges)} propagators "
+        f"NeatIBP: reducing {topo.nickel()}, {len(topo.int_edges)} propagators{what} "
         f"— minutes; logs under {workdir}"
     )
     res = neatibp.run(topo, workdir, mode=state.get("neatibp_mode", "auto"))
@@ -254,12 +260,13 @@ def neatibp_node(state: State) -> dict:
     # all of it, so anything the run had to do on the side goes underneath — and
     # carries its own dash, the report being one flattened line per stage.
     detail = f"{len(res.masters)} master integrals, {res.n_ibp} IBP relations{note}"
+    targets = [f"— targets: {topo.numerator} = {res.expansion}"] if res.expansion else []
     return {
         "ibp": res,
         **_step(
             "NeatIBP",
             "ok",
-            "\n".join([detail, *(f"— {n}" for n in res.notes)]),
+            "\n".join([detail, *targets, *(f"— {n}" for n in res.notes)]),
             mocked=res.mocked,
         ),
     }
@@ -374,8 +381,11 @@ def assemble(state: State) -> dict:
             f"NeatIBP wrote the system under {ibp.workdir}/outputs/*/results/ "
             f"(solve it with Kira or FiniteFlow for the target's coefficients)."
         )
+    expansion = ""
+    if ibp is not None and ibp.expansion:
+        expansion = f"The numerator gives `{state['topo'].numerator}` = {ibp.expansion}, and "
     answer = (
-        f"IBP reduction resolves this integral completely: it reduces to "
+        f"{expansion}IBP reduction resolves this integral completely: it reduces to "
         f"{len(masters)} master integral(s), every one of which is known "
         f"({len(with_form)} with a closed form stored locally, the rest by "
         f"literature reference). See **Master integrals** below for each one.{where}"
@@ -487,24 +497,31 @@ def extract_node(state: State) -> dict:
     picks = extract.select(candidates, limit)
     #-------------------------------------------------------------
     # An API call is network like any other, so --offline silences the model too.
-    summarise = state.get("extract_mode", "auto") == "auto" and not offline
-    # Rewriting a page of LaTeX is the slowest thing a run without a reduction
-    # does — a reasoning model spends minutes per equation thinking — so the
-    # line says so, the way the NeatIBP line does.
-    slow = " — rewriting its equations, minutes" if summarise else ""
+    mode = state.get("extract_mode", "auto")
+    summarise = mode in ("auto", "rewrite") and not offline
+    # Rewriting the equations is a call each, where the summary is one call for
+    # the paper, so it is the level nobody gets without asking.
+    rewrite = mode == "rewrite" and not offline
+    # It is also the slowest thing a run without a reduction does — a reasoning
+    # model spends minutes per equation thinking — so the line says so, the way
+    # the NeatIBP line does.
+    slow = " — rewriting its equations, minutes" if rewrite else ""
     found = []
     for n, (paper, target) in enumerate(picks, 1):
         _progress(f"reading arXiv:{paper.arxiv_id} ({n}/{len(picks)}) {paper.title[:40]}{slow}")
-        found.append(extract.extract(paper, target=target, offline=offline, summarise=summarise))
+        found.append(
+            extract.extract(
+                paper, target=target, offline=offline, summarise=summarise, rewrite=rewrite
+            )
+        )
 
     errors = [f"arXiv:{e.paper.arxiv_id}: {e.error}" for e in found if e.error]
     files = sum(len(e.files) for e in found)
     eqs = sum(len(e.equations) for e in found)
-    shown = sum(1 for e in found for q in e.equations if q.clean)
-    detail = (
-        f"read {len(found)} paper(s): {files} data file(s), "
-        f"{eqs} candidate result equation(s), {shown} rewritten to read"
-    )
+    detail = f"read {len(found)} paper(s): {files} data file(s), {eqs} result equation(s)"
+    if rewrite:
+        shown = sum(1 for e in found for q in e.equations if q.clean)
+        detail += f", {shown} rewritten to read"
     # A reduction cites more papers than anyone wants downloaded, so say how
     # many were left — a silent cap reads as "that was everything".
     if len(candidates) > len(picks):
@@ -582,6 +599,7 @@ def report(state: State) -> dict:
                 if topo.masses
                 else []
             ),
+            *([f"- **numerator** — `{topo.numerator}`"] if topo.numerator else []),
             *(f"- **note** — {n}" for n in topo.notes),
             "",
         ]
@@ -607,6 +625,13 @@ def report(state: State) -> dict:
     masters = state.get("masters")
     if masters:
         lines += [f"## Master integrals ({len(masters)})", ""]
+        ibp = state.get("ibp")
+        if ibp is not None and ibp.expansion:
+            lines += [
+                f"`{topo.numerator}` over these propagators is {ibp.expansion}, "
+                "each term reduced to the masters below.",
+                "",
+            ]
         for m in masters:
             lines += _master_lines(m)
         lines.append("")
@@ -705,7 +730,12 @@ def _parse_integrand(raw: str):
         symbols = {s for p in props for s in re.findall(r"[A-Za-z]\w*", p)}
         loops = sorted(s for s in symbols if s.startswith("l"))
         exts = sorted(s for s in symbols if not s.startswith("l"))
-    return T.from_propagators(props, loops, exts, name="integrand", masses=masses)
+    topo = T.from_propagators(props, loops, exts, name="integrand", masses=masses)
+    # NeatIBP has no such line; it is this agent's, and neatibp.py turns it into
+    # the index vectors NeatIBP does take.
+    m = re.search(r"Numerator\s*=\s*([^;]+)", raw)
+    topo.numerator = " ".join(m.group(1).split()) if m else ""
+    return topo
 
 #----------------------------------------------------------
 def _format_loopedia(res: loopedia.LookupResult) -> str:
@@ -810,7 +840,10 @@ def _finish(state: State) -> str:
 def _after_loopedia(state: State) -> str:
     if _in_loop(state):
         return "advance"  # close this diagram out, then round again
-    if state.get("answer") and not state.get("always_reduce"):
+    # A reference for the graph is an answer for its scalar integral only; a
+    # numerator is a different integral of the same family and has to be
+    # reduced to say what it is in terms of the masters that reference gives.
+    if state.get("answer") and not (state.get("always_reduce") or state["topo"].numerator):
         return _finish(state)
     return "neatibp"
 

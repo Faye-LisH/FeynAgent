@@ -67,10 +67,11 @@ neither does the browser front end, which is `http.server`.
 ### API key (optional, two steps)
 
 A model is used in three places, none of them on the path from a Nickel index to
-a result: reading a **diagram image**, rewriting a paper's equations into LaTeX
-that renders, and summarising what that paper gives. Without a key the figure
-input is unavailable, and the paper reading still reports every file and
-equation it found — in the authors' own macros, and without the summary. Put the
+a result: reading a **diagram image**, summarising what a paper gives, and —
+only when asked for with `--extract rewrite` — rewriting that paper's equations
+into LaTeX that renders. Without a key the figure input is unavailable, and the
+paper reading still reports every file and equation it found, in the authors'
+own macros and without the summary. Put the
 key in a project-local `.env` (gitignored), or export it (an exported variable
 wins):
 
@@ -194,12 +195,30 @@ python -m feynman_agent diagram.png                    # figure (needs ANTHROPIC
 ```
 
 Useful flags: `--neatibp {auto,real,mock}`, `--offline` (cached Loopedia and
-papers only), `--arxiv {ask,yes,no}`, `--extract {auto,fetch,off}`,
+papers only), `--arxiv {ask,yes,no}`, `--extract {auto,rewrite,fetch,off}`,
 `--max-papers N`, `--workdir DIR`, `-o/--out FILE`, `--quiet`, and `--reduce` to
 run the IBP reduction even when a reference was already found.
 
+`--extract` is how deeply the papers get read, and it is the only flag that
+changes what a run costs in API calls:
+
+| Level | What the model does | Calls |
+|---|---|---|
+| `auto` (default) | summarises each paper: what it gives, where, whether it matches | one per paper |
+| `rewrite` | that, and rewrites every candidate equation into LaTeX that renders | one per paper, plus one per equation |
+| `fetch` | nothing — the source is still downloaded and the equations still listed | none |
+| `off` | nothing; the papers are not opened at all | none |
+
+Only `rewrite` is expensive, which is why it is not the default: a paper offers
+six candidate equations, and a reasoning model can spend minutes on each. Under
+every other level the report prints the equations exactly as the authors wrote
+them, in their own macros.
+
 There is also a browser front end — [below](#in-a-browser) — which is the same
 agent with a drop target for diagrams and the tool paths in a sidebar.
+
+A complete worked example — the double box with a numerator, its input, a run
+script, and the report a run produces — is in [`example/`](example/README.md).
 
 ### The report
 
@@ -330,6 +349,7 @@ holding an API key and starting Mathematica belongs.
 | Nickel + masses | `e11|e|:n11|n|` | Loopedia's mass configuration (see below) |
 | Edge list | `[(1,2),(2,3),(2,3),(3,4)]` | degree-1 vertices become external legs |
 | Integrand / kinematics | `Propagators={l1^2-m^2,(l1+k1)^2,...}` | graph rebuilt from momentum conservation, masses split off |
+| … with a numerator | `Propagators={...};Numerator=l1.k4;` | expanded in the propagator basis into NeatIBP targets (see below) |
 | Figure | `diagram.png` | Claude proposes an edge list, the code then verifies it |
 
 Everything is canonicalised to a Nickel index, which is the key for every lookup.
@@ -341,7 +361,8 @@ an exact cover of all endpoints by `V = P − L + 1` such sets. That is solved
 exactly rather than heuristically, and it identifies irreducible scalar products
 for free: if no cover exists, entries are dropped until one does. Given the nine
 `Propagators` of the shipped NeatIBP double-box example it recovers the 7-line
-graph and correctly flags `l1+k4` and `l2+k1` as the two ISPs.
+graph and correctly flags `l1+k4` and `l2+k1` as the two ISPs — which it keeps,
+in that order, as the basis it hands back to NeatIBP.
 
 ### Specifying masses
 
@@ -391,6 +412,51 @@ Saying nothing about masses is not the same as asking for the massless case:
 silence leaves the catalogue's own ordering alone, while `:zzz|z|` is a request
 like any other and gets the same filtering.
 
+### Specifying a numerator
+
+A diagram usually carries momenta in the numerator, which after tensor
+reduction are dot products of the loop and external momenta. NeatIBP has no
+numerator field — an integral is an index vector `G[n1,…,nN]` over a complete
+propagator basis, and a propagator raised to a power upstairs is a negative
+entry — so the numerator is first written in that basis. On the double box,
+with massless legs,
+
+```
+l1.k4 = ((l1+k4)^2 - l1^2 - k4^2)/2 = (D8 - D1)/2
+l1.k4 / (D1 … D7) = 1/2 G[1,1,1,1,1,1,1,-1,0] - 1/2 G[0,1,1,1,1,1,1,0,0]
+```
+
+That is what every example shipped with NeatIBP does by hand. Here it is a line
+in the integrand block:
+
+```
+LoopMomenta={l1,l2};
+ExternalMomenta={k1,k2,k4};
+Propagators={l1^2,(l1+k1)^2,(l1+k1+k2)^2,(l2-k1-k2)^2,(l2+k4)^2,l2^2,(l1+l2)^2,(l1+k4)^2,(l2+k1)^2};
+Numerator=(l1.k4)^2 - 3*l2^2;
+```
+
+Dot products are written `a.b`, `l1^2` is accepted for `l1.l1`, powers use
+`^`, and kinematic symbols may appear. A bare momentum such as `l1*k4` is
+refused: with four momenta in a monomial the pairing would be ambiguous. The
+ISPs you list are the basis the expansion is written in; if you list none, the
+agent invents enough to complete the basis and says which.
+
+What changes when a numerator is given:
+
+- **The reduction always runs.** A stored closed form or a Loopedia reference
+  answers the *scalar* integral of the graph; the numerator is a different
+  integral of the same family, so the run goes on to NeatIBP, whose targets
+  are the numerator's terms rather than the corner integral. The catalogue's
+  references still appear — they are where the masters are evaluated.
+- **The report says what the numerator is.** `## Identified` names it,
+  `## Master integrals` opens with its expansion into targets, and the NeatIBP
+  stage in `## What was done` repeats it. With `--neatibp mock` the expansion is
+  still computed; only the masters are replayed.
+- **Not done for you:** combining NeatIBP's reduction of each target back into
+  one expression. The coefficients are under the run's `outputs/*/results/`, as
+  the report points out.
+
 ## Correctness checks
 
 The Nickel index implementation is cross-validated against Loopedia itself:
@@ -431,9 +497,9 @@ suite additionally round-trips each topology through momentum routing and back
   opened and their results extracted (`--max-papers N` to change it). Every
   diagram gets one before any diagram gets a second, so a reduction with eight
   masters does not spend the whole budget on the first of them, and the report
-  says how many candidates it did not open. Each equation is shown twice: once
-  rewritten by the model into LaTeX that renders anywhere, and under it the
-  source the authors wrote. See below.
+  says how many candidates it did not open. Each equation is shown as the
+  authors wrote it; with `--extract rewrite` a rendering version goes above it.
+  See below.
 
 ### Getting the result out of a paper
 
@@ -446,7 +512,7 @@ submitted source (`arxiv.org/e-print/<id>`, cached) and takes it apart:
 | **The ancillary README** | Usually a file-by-file key ("*the folder contains the full results up to weight 4*"), which beats any heuristic description. |
 | **Result equations** | Display equations are ranked by *what they are written in* — polylogarithms, `G`/`H` functions, zeta values, powers of ε — which identifies a result far better than any keyword in the prose. Two such markers are required, an equation still containing `\int` is penalised as a definition rather than an evaluation, and the report says which file and section each came from. |
 | **The sentence naming the files** | "*Explicit results for all integrals, and up to weight 6, can be found in the ancillary files resultA.m and resultE.m*" — the authors' own answer to the question. |
-| **Equations you can read** | What comes out of a submission is written in that paper's own macros — `\dps A_{7,1} &=& i \, \ESGamma^3 \lek -\lp q\rp^2 \rek^{-1-3\eps}` — which renders nowhere and reads as nothing. The paper's macro definitions are in the same tarball, so both go to the model, which says whether the equation is a result at all and rewrites it in standard amsmath: `A_{7,1} = i S_\Gamma^3\left[-q^2-i\eta\right]^{-1-3\varepsilon}\left[\frac{1}{4\varepsilon^5} + \dots\right]`. Transcription, never evaluation — and the source stays underneath, where any liberty taken is visible against it. One call per equation, run together; without a key the report prints the authors' LaTeX and says why. |
+| **Equations you can read** | What comes out of a submission is written in that paper's own macros — `\dps A_{7,1} &=& i \, \ESGamma^3 \lek -\lp q\rp^2 \rek^{-1-3\eps}` — which renders nowhere and reads as nothing. The paper's macro definitions are in the same tarball, so both go to the model, which says whether the equation is a result at all and rewrites it in standard amsmath: `A_{7,1} = i S_\Gamma^3\left[-q^2-i\eta\right]^{-1-3\varepsilon}\left[\frac{1}{4\varepsilon^5} + \dots\right]`. Transcription, never evaluation — and the source stays underneath, where any liberty taken is visible against it. One call per equation, run together — which is why this step is the one thing here that has to be asked for, with `--extract rewrite`. Without it, or without a key, the report prints the authors' LaTeX and says why. |
 
 **Which papers get opened** depends on how the run got here, and the catalogue
 route is the common one:
@@ -587,13 +653,14 @@ back to the mock immediately, with the reason stated, instead of hanging.
   translation. The instruction is to expand the paper's macros and change
   nothing else, and the source is printed underneath so the two can be compared
   — but nothing here checks that they agree. Without a key, offline, or with
-  `--extract fetch`, the report shows the authors' LaTeX and says why.
+  anything but `--extract rewrite`, the report shows the authors' LaTeX and
+  says why.
 - That step is also the slowest thing in a run that has no reduction in it. A
   reasoning model spends most of its budget *thinking* about a transcription:
   measured at ten to twenty minutes per paper on `kimi-k3`, against seconds on a
   model that does not reason. The calls for one paper run together, so it is the
-  slowest equation that sets the time, not their number. `--extract fetch` skips
-  the step entirely and `FEYNMAN_AGENT_TIMEOUT` bounds each call.
+  slowest equation that sets the time, not their number. It is off unless
+  `--extract rewrite` asks for it, and `FEYNMAN_AGENT_TIMEOUT` bounds each call.
 - The lookup loop spends supersteps: up to six per queued diagram (two lookups
   and an advance, twice if the merged-leg retry fires). LangGraph's default
   `recursion_limit` of 25 would abort a reduction with more than about three
@@ -603,7 +670,7 @@ back to the mock immediately, with the reason stated, instead of hanging.
 ## Tests
 
 ```bash
-python -m pytest tests/ -q     # 131 tests, offline (NeatIBP mocked, Loopedia cached,
+python -m pytest tests/ -q     # 143 tests, offline (NeatIBP mocked, Loopedia cached,
                                # arXiv tarballs built in the test itself)
 ```
 
@@ -612,6 +679,7 @@ python -m pytest tests/ -q     # 131 tests, offline (NeatIBP mocked, Loopedia ca
 | `test_topology.py` | Nickel canonicalisation, momentum routing, pinching, masses |
 | `test_workflow.py` | Routing, the lookup loop, the report, the provider layer, the CLI |
 | `test_extract.py` | Tarballs, equations, macros, and the model rewrite around them |
+| `test_numerator.py` | A numerator's expansion into targets, every identity worked by hand |
 | `test_web.py` | The front end: a real server, its routes, and the arXiv question |
 | `test_export_graph.py` | The graph picture |
 

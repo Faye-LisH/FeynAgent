@@ -68,6 +68,7 @@ def test_double_box_from_neatibp_propagators():
     )
     assert topo.nickel() == "e12|e3|34|5|e5|e|"
     assert len(topo.int_edges) == 7  # the two ISPs were identified and dropped
+    assert topo.isps == ["l1+k4", "l2+k1"]  # but kept: they are the caller's basis
     assert topo.n_loops == 2 and topo.n_legs == 4
 
 

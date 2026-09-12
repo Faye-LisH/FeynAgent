@@ -636,6 +636,48 @@ def test_the_paper_budget_is_shared_out_and_says_what_it_left(monkeypatch):
     assert "not opened" not in more["trace"][0]["detail"]
 
 
+def test_the_equation_rewrite_is_a_level_of_its_own(monkeypatch):
+    """Which of the two model steps each --extract level pays for."""
+    from feynman_agent import extract
+    from feynman_agent.graph import extract_node
+
+    seen = []
+
+    def record(paper, target="", offline=False, summarise=True, rewrite=False):
+        seen.append((summarise, rewrite))
+        return extract.Extraction(paper=paper, target=target)
+
+    monkeypatch.setattr(extract, "extract", record)
+    monkeypatch.setattr(extract, "cached", lambda aid: True)  # so --offline still opens it
+    masters = [{"nickel": "e11|e|", "references": ["arXiv:1303.1111"]}]
+
+    auto = extract_node({"masters": masters, "extract_mode": "auto"})
+    rewritten = extract_node({"masters": masters, "extract_mode": "rewrite"})
+    extract_node({"masters": masters, "extract_mode": "rewrite", "offline": True})
+
+    assert seen == [(True, False), (True, True), (False, False)], "offline silences both"
+    # And the count only appears where it means something.
+    assert "rewritten to read" not in auto["trace"][0]["detail"]
+    assert "rewritten to read" in rewritten["trace"][0]["detail"]
+
+
+def test_how_deeply_to_read_reaches_the_state_from_the_command_line(monkeypatch):
+    from feynman_agent import cli
+
+    seen = {}
+    monkeypatch.setattr(
+        cli.session,
+        "drive",
+        lambda payload, config, on, answer: seen.update(payload) or {"report": "", "topo": None},
+    )
+    monkeypatch.setattr(cli, "_write", lambda state, out: None)
+
+    cli.main(["e11|e|", "--offline"])
+    assert seen["extract_mode"] == "auto", "the per-equation calls are not the default"
+    cli.main(["e11|e|", "--offline", "--extract", "rewrite"])
+    assert seen["extract_mode"] == "rewrite"
+
+
 def test_max_papers_reaches_the_state_from_the_command_line(monkeypatch):
     from feynman_agent import cli
 
@@ -751,6 +793,53 @@ def test_the_isps_dropped_by_the_reconstruction_take_their_indices_with_them():
     assert topo.nickel() == "e12|e3|34|5|e5|e|"
     assert len(topo.propagators) == 7  # the two ISPs went
     assert {topo.propagators[i] for i in topo.masses} == {"l1", "l1+l2"}
+
+
+def test_the_numerator_line_is_read_and_the_isps_go_to_neatibp_as_given():
+    from feynman_agent import neatibp
+    from feynman_agent.graph import _parse_integrand
+
+    topo = _parse_integrand(
+        "LoopMomenta={l1,l2};ExternalMomenta={k1,k2,k4};"
+        "Propagators={l1^2,(l1+k1)^2,(l1+k1+k2)^2,(l2-k1-k2)^2,(l2+k4)^2,"
+        "l2^2,(l1+l2)^2,(l1+k4)^2,(l2+k1)^2};\nNumerator = 2*(l1.k4)^2 ;"
+    )
+    assert topo.numerator == "2*(l1.k4)^2"
+    text, notes, isps = neatibp.kinematics_text(topo)
+    assert isps == ["l1+k4", "l2+k1"]
+    assert "(l1+l2)^2,(l1+k4)^2,(l2+k1)^2};" in text, "the caller's order, ISPs last"
+    assert not any("added ISPs" in n for n in notes), "nothing was invented"
+    # And the kinematics name the momenta the caller used, k4 included.
+    assert "k1 k4->(-s-t)/2" in text
+
+
+def test_a_numerator_is_reduced_even_when_the_catalogue_knows_the_graph():
+    """The double box is in Loopedia, so the scalar integral stops there.
+
+    With a numerator the graph is the same and the integral is not: the run
+    has to go on to the reduction, which says what the numerator is in terms
+    of the family's masters — the ones the catalogue's references evaluate.
+    """
+    from feynman_agent import neatibp
+
+    if not neatibp.recorded().joinpath("summary.txt").exists():
+        pytest.skip("no recorded NeatIBP run in this checkout")
+    out = run(
+        "LoopMomenta={l1,l2};ExternalMomenta={k1,k2,k4};"
+        "Propagators={l1^2,(l1+k1)^2,(l1+k1+k2)^2,(l2-k1-k2)^2,(l2+k4)^2,"
+        "l2^2,(l1+l2)^2,(l1+k4)^2,(l2+k1)^2};Numerator=l1.k4;"
+    )
+    assert steps(out)["NeatIBP"] == "ok"
+    assert len(out["masters"]) == 8
+    expansion = "-1/2 G[0,1,1,1,1,1,1,0,0] + 1/2 G[1,1,1,1,1,1,1,-1,0]"
+    assert out["ibp"].expansion == expansion
+    # Offline, some masters stay unresolved and the run pauses to ask about
+    # arXiv, so render the report from where it stopped.
+    from feynman_agent.graph import report
+
+    text = report(out)["report"]
+    assert "- **numerator** — `l1.k4`" in text
+    assert f"`l1.k4` over these propagators is {expansion}" in text
 
 
 def test_a_massless_stored_result_is_not_an_answer_for_a_massive_graph():

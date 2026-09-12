@@ -20,7 +20,16 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .topology import Topology, Vec, _rank, assign_momenta, mass_symbols, propagator_terms
+from . import numerator
+from .topology import (
+    Topology,
+    Vec,
+    _rank,
+    assign_momenta,
+    g_string,
+    mass_symbols,
+    propagator_terms,
+)
 
 # Where the three external tools live on this machine, and the variable that
 # moves each one somewhere else.
@@ -57,6 +66,11 @@ class IBPResult:
     n_integrals: int = 0
     sectors: dict[str, int] = field(default_factory=dict)
     summary: str = ""
+    # A numerator, written as the combination of target integrals it was sent
+    # as: ``1/2 G[1,1,1,1,1,1,1,-1,0] - 1/2 G[0,1,1,1,1,1,1,0,0]``. Empty for the
+    # scalar integral. Filled whether or not a kernel ran, since the masters a
+    # mock replays are the family's and this is what the numerator is in them.
+    expansion: str = ""
     # What the run had to do besides reduce: ISPs invented, masses passed
     # through, a previous run's output cleared out of the way. The report says
     # so, because two of the three change what the numbers below mean and the
@@ -94,13 +108,19 @@ def _parse(expr: str, basis: list[str]) -> Vec:
 
 
 def complete_basis(topo: Topology) -> list[str]:
-    """Return ISP momenta that complete the propagator set to a full SP basis."""
+    """The ISP momenta that complete the propagators to a full SP basis.
+
+    The caller's own come first and are kept whatever they are: a numerator
+    is expanded in this basis, and the coefficients should be in the ISPs the
+    caller chose, not in whichever ones a search happened to find first. More
+    are invented only if those still leave the basis short.
+    """
     L, E = topo.n_loops, len(topo.ext_momenta)
     basis = topo.loop_momenta + topo.ext_momenta
     need = L * (L + 1) // 2 + L * E
-    vecs = [_sp_vector(_parse(p, basis), L, E) for p in topo.propagators]
+    vecs = [_sp_vector(_parse(p, basis), L, E) for p in topo.propagators + topo.isps]
     if _rank([tuple(v) for v in vecs]) >= need:
-        return []
+        return list(topo.isps)
 
     candidates: list[str] = []
     for i in range(L):
@@ -115,7 +135,7 @@ def complete_basis(topo: Topology) -> list[str]:
                 f"{topo.loop_momenta[i]}+{topo.ext_momenta[x]}+{topo.ext_momenta[y]}"
             )
 
-    chosen = []
+    chosen = list(topo.isps)
     for cand in candidates:
         if len(vecs) >= need:
             break
@@ -126,14 +146,36 @@ def complete_basis(topo: Topology) -> list[str]:
     return chosen
 
 
+def invariants(ext: list[str]) -> list[tuple[str, str, str]]:
+    """The external kinematics NeatIBP is told: ``(a, b, value)`` for a.b = value.
+
+    Legs massless and on shell, with ``s`` and ``t`` up to four points. Five
+    and more are left as the squares alone; the note in ``kinematics_text``
+    says the rest is to be filled in by hand.
+    """
+    k = ext
+    squares = [(x, x, "0") for x in k]
+    if len(k) == 1:
+        return [(k[0], k[0], "s")]
+    if len(k) == 2:
+        return squares + [(k[0], k[1], "s/2")]
+    if len(k) == 3:
+        return squares + [(k[0], k[1], "s/2"), (k[1], k[2], "t/2"), (k[0], k[2], "(-s-t)/2")]
+    return squares
+
+
 # Denominators for the mass values at the generic point. NeatIBP's own examples
 # use small unrelated fractions; they only have to be distinct, and there are
 # more here than a graph under the vertex cap can have propagators.
 MASS_POINT = (97, 23, 41, 17, 13, 7, 61, 53, 29, 11, 79, 37, 43, 71, 19, 89)
 
 
-def kinematics_text(topo: Topology) -> tuple[str, list[str], int]:
-    """Build kinematics.txt: masses as given, external legs massless and on shell."""
+def kinematics_text(topo: Topology) -> tuple[str, list[str], list[str]]:
+    """Build kinematics.txt: masses as given, external legs massless and on shell.
+
+    Returns the text, what building it involved, and the ISPs in the order
+    they were appended — the basis that ``target_text`` writes vectors over.
+    """
     n_ext = len(topo.ext_momenta)
     isps = complete_basis(topo)
     # ISPs are scalar products completing the basis, never real lines, so they
@@ -142,21 +184,10 @@ def kinematics_text(topo: Topology) -> tuple[str, list[str], int]:
     notes = []
 
     k = topo.ext_momenta
-    if n_ext == 1:
-        rules = "{k1^2->s}"
-        values = ["s->-1"]
-    elif n_ext == 2:
-        rules = "{k1^2->0,k2^2->0,k1 k2->s/2}"
-        values = ["s->-1"]
-    elif n_ext == 3:
-        rules = (
-            "{k1^2->0,k2^2->0,k3^2->0,"
-            "k1 k2->s/2,k2 k3->t/2,k1 k3->(-s-t)/2}"
-        )
-        values = ["s->-1", "t->-1/19"]
-    else:
-        rules = "{" + ",".join(f"{x}^2->0" for x in k) + "}"
-        values = []
+    rules = invariants(k)
+    text_rules = "{" + ",".join(f"{a}^2->{v}" if a == b else f"{a} {b}->{v}" for a, b, v in rules) + "}"
+    values = [f"{x}->{at}" for x, at in (("s", "-1"), ("t", "-1/19")) if any(x in v for _, _, v in rules)]
+    if n_ext > 3:
         notes.append(
             f"{n_ext + 1}-point kinematics is not templated; "
             "the invariant rules in kinematics.txt need to be filled in by hand."
@@ -173,17 +204,18 @@ def kinematics_text(topo: Topology) -> tuple[str, list[str], int]:
             "LoopMomenta={" + ",".join(topo.loop_momenta) + "};",
             "ExternalMomenta={" + ",".join(k) + "};",
             "Propagators={" + ",".join(props) + "};",
-            f"Kinematics={rules};",
+            f"Kinematics={text_rules};",
             "GenericPoint={" + ",".join(values) + "};",
             "GenericD={d->1/137}",
             "",
         ]
     )
-    if isps:
-        notes.append("added ISPs to complete the basis: " + ", ".join(isps))
+    invented = isps[len(topo.isps) :]
+    if invented:
+        notes.append("added ISPs to complete the basis: " + ", ".join(invented))
     if symbols:
         notes.append("masses carried through to NeatIBP: " + ", ".join(symbols))
-    return text, notes, len(props)
+    return text, notes, isps
 
 
 def config_text(name: str) -> str:
@@ -216,16 +248,23 @@ DeleteSingularTempFiles=True;
 """
 
 
-def target_text(topo: Topology, n_total: int) -> str:
-    """Corner integral of the top sector, plus one dotted propagator."""
-    corner = [1] * len(topo.propagators) + [0] * (n_total - len(topo.propagators))
-    dotted = list(corner)
-    dotted[0] = 2
-    return (
-        "{\n"
-        + ",\n".join("G[" + ",".join(map(str, v)) + "]" for v in (corner, dotted))
-        + "\n}\n"
-    )
+def target_text(topo: Topology, isps: list[str]) -> tuple[str, str]:
+    """targetIntegrals.txt, and the numerator's decomposition in words.
+
+    The scalar integral is the corner of the top sector plus one dotted
+    propagator. A numerator is instead the terms it expands to over the basis,
+    negative entries standing for the ISP powers upstairs, and the second value
+    says so: ``1/2 G[...] - 1/2 G[...]``. See numerator.py.
+    """
+    if topo.numerator:
+        terms = numerator.expand(topo, isps, invariants(topo.ext_momenta))
+        vectors = [v for _, v in terms]
+        expansion = numerator.combination(terms)
+    else:
+        corner = [1] * len(topo.propagators) + [0] * len(isps)
+        vectors = [corner, [2] + corner[1:]]
+        expansion = ""
+    return "{\n" + ",\n".join(g_string(v) for v in vectors) + "\n}\n", expansion
 
 
 def output_name(topo: Topology) -> str:
@@ -262,13 +301,24 @@ def clear_output(out: Path) -> tuple[bool, str]:
     return True, f"cleared the finished NeatIBP run already in {out}"
 
 
-def write_inputs(topo: Topology, workdir: Path) -> list[str]:
+def inputs(topo: Topology) -> tuple[dict[str, str], list[str], str]:
+    """The three files NeatIBP reads, by name; what building them involved; the
+    numerator's decomposition, if there was one. Pure, so that a run that never
+    starts a kernel still has all three."""
+    kin, notes, isps = kinematics_text(topo)
+    targets, expansion = target_text(topo, isps)
+    files = {
+        "kinematics.txt": kin,
+        "config.txt": config_text(output_name(topo)),
+        "targetIntegrals.txt": targets,
+    }
+    return files, notes, expansion
+
+
+def write_inputs(files: dict[str, str], workdir: Path) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
-    kin, notes, n_total = kinematics_text(topo)
-    (workdir / "kinematics.txt").write_text(kin)
-    (workdir / "config.txt").write_text(config_text(output_name(topo)))
-    (workdir / "targetIntegrals.txt").write_text(target_text(topo, n_total))
-    return notes
+    for name, text in files.items():
+        (workdir / name).write_text(text)
 
 
 # --------------------------------------------------------------------------
@@ -363,13 +413,21 @@ def run(
     """Run NeatIBP on ``topo``. mode is 'auto', 'real' or 'mock'."""
     if not topo.propagators:
         topo = assign_momenta(topo)
+    files, notes, expansion = inputs(topo)
     if mode == "mock":
-        return _mock(topo, "mock mode")
-    if mode == "auto" and not available():
+        res = _mock(topo, "mock mode")
+    elif mode == "auto" and not available():
         why = "Singular is not runnable" if not singular_works() else "NeatIBP not available"
-        return _mock(topo, why)
+        res = _mock(topo, why)
+    else:
+        res = _real(topo, workdir, files, notes, timeout)
+    res.expansion = expansion
+    return res
 
-    notes = write_inputs(topo, workdir)
+
+def _real(topo: Topology, workdir: Path, files: dict, notes: list[str], timeout: int) -> IBPResult:
+    """Write the inputs, start the kernel, wait; a mock stands in for any failure."""
+    write_inputs(files, workdir)
     out = workdir / "outputs" / output_name(topo)
     ok, note = clear_output(out)
     if not ok:

@@ -3,4 +3,5 @@ langchain-core>=1.0
 langchain-anthropic>=1.0   # figure input via Anthropic
 langchain-openai>=1.0      # figure input via Kimi/Moonshot, OpenAI, or any OpenAI-compatible endpoint
 arxiv>=2.0                 # only for the last-resort literature search
+sympy>=1.12                # expanding a numerator in the propagator basis
 pytest                     # tests

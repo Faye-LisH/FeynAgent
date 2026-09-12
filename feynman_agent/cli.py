@@ -72,10 +72,13 @@ def main(argv=None) -> int:
     )
     p.add_argument(
         "--extract",
-        choices=["auto", "fetch", "off"],
+        choices=["auto", "rewrite", "fetch", "off"],
         default="auto",
-        help="read the results out of the papers arXiv returns; 'fetch' skips the "
-        "model summary, 'off' stops at the titles (default: auto)",
+        help="how deeply to read the papers arXiv returns (default: auto, a "
+        "one-call summary of each); 'rewrite' also has the model rewrite every "
+        "candidate equation so it renders, which is a call each and the fastest "
+        "way to spend a quota; 'fetch' takes the source with no model call and "
+        "prints the authors' own LaTeX; 'off' stops at the titles",
     )
     p.add_argument(
         "--max-papers",

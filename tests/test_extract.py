@@ -216,6 +216,35 @@ def test_a_failed_model_call_does_not_lose_the_extraction(monkeypatch):
     assert any("credit balance" in n for n in ex.notes)
 
 
+def test_rewriting_the_equations_is_off_until_it_is_asked_for(monkeypatch):
+    """The summary is one call for a paper; the rewrite is one per equation.
+
+    That difference is the whole reason the two are separate switches, so the
+    expensive one has to be asked for and the report otherwise prints the
+    LaTeX the authors wrote.
+    """
+    from feynman_agent import llm
+
+    monkeypatch.setattr(extract, "fetch", lambda aid, offline=False: _tarball({"m.tex": RESULT_TEX}))
+    monkeypatch.setattr(llm, "available", lambda: True)
+    seen = []
+
+    def fake(prompt):
+        seen.append(prompt)
+        return "RESULT: yes\nGIVES: a bubble\nLATEX:\nI = 1"
+
+    monkeypatch.setattr(llm, "ask", fake)
+
+    ex = extract.extract(_paper(), summarise=True)  # what --extract auto asks for
+    assert len(seen) == 1, "one call for the paper, none for its equations"
+    assert ex.equations and not any(e.clean for e in ex.equations)
+    assert "```latex" in "\n".join(ex.markdown())
+
+    seen.clear()
+    ex = extract.extract(_paper(), summarise=True, rewrite=True)
+    assert len(seen) > 1 and all(e.clean for e in ex.equations)
+
+
 ALIASED_TEX = rb"""
 \newcommand{\bea}{\begin{eqnarray}}
 \newcommand{\eea}{\end{eqnarray}}
